@@ -17,6 +17,9 @@ from gym import error
 
 try:
     import pyglet
+    if (os.environ.get('SAFE_MARL_HEADLESS_RENDER', '').lower() in
+            ('1', 'true', 'yes') and sys.platform.startswith('linux')):
+        pyglet.options['headless'] = True
 except ImportError as e:
     print(suffix="HINT: you can install pyglet directly via 'pip install pyglet'. But if you really just want to install all Gym dependencies and not have to think about it, 'pip install -e .[all]' or 'pip install gym[all]' will do it.")
 
@@ -49,7 +52,11 @@ class Viewer(object):
         print("display: ", display)
         self.width = width
         self.height = height
-        self.window = pyglet.window.Window(width=int(width), height=int(height), display=display)
+        headless_render = os.environ.get(
+            'SAFE_MARL_HEADLESS_RENDER', '').lower() in ('1', 'true', 'yes')
+        self.window = pyglet.window.Window(
+            width=int(width), height=int(height), display=display,
+            visible=not headless_render)
         self.window.on_close = self.window_closed_by_user
         self.geoms = []
         self.onetime_geoms = []

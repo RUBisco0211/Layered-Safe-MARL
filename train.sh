@@ -4,6 +4,10 @@ logs_folder="logs"
 mkdir -p $logs_folder
 # Run the script
 
+# Render eval videos without opening a visible window. Pyglet's EGL-backed
+# headless mode is available on Linux; macOS uses an invisible Cocoa window.
+export SAFE_MARL_HEADLESS_RENDER=true
+
 seed_max=2
 
 # Change this to your name (used as prefix for experiment names).
@@ -105,6 +109,7 @@ run_training() {
     --use_safety_filter ${use_safety_filter} \
     --num_internal_step ${num_internal_step} \
     --use_masking "True" \
+    --use_eval --n_eval_rollout_threads 1 --eval_interval 50 --render_eval \
     --checkpoint_interval 50 \
     ${model_dir_arg}
 }

@@ -1,4 +1,5 @@
 import time
+import os
 import numpy as np
 from numpy import ndarray as arr
 from typing import Tuple
@@ -555,7 +556,50 @@ class GMPERunner(Runner):
 	@torch.no_grad()
 	def eval(self, total_num_steps:int):     
 		eval_episode_rewards = []
-		eval_obs, eval_agent_id, eval_node_obs, eval_adj = self.eval_envs.reset()
+		eval_obs, eval_agent_id, eval_node_obs, eval_adj, *_ = self.eval_envs.reset()
+
+		record_eval_video = self.use_wandb and self.all_args.render_eval
+		eval_video_writer = None
+		eval_video_path = None
+
+		def write_eval_frame():
+			nonlocal record_eval_video, eval_video_writer, eval_video_path
+			if not record_eval_video:
+				return
+			try:
+				frame = self.eval_envs.render('rgb_array')[0][0]
+				if frame.ndim != 3 or frame.shape[-1] not in (3, 4):
+					raise ValueError(f"unexpected eval frame shape: {frame.shape}")
+				if frame.shape[-1] == 4:
+					frame = frame[:, :, :3]
+				if frame.dtype != np.uint8:
+					frame = np.clip(frame, 0, 255).astype(np.uint8)
+
+				if eval_video_writer is None:
+					eval_video_dir = os.path.join(self.run_dir, 'eval_videos')
+					os.makedirs(eval_video_dir, exist_ok=True)
+					eval_video_path = os.path.join(
+						eval_video_dir, f'eval_step_{total_num_steps}.mp4')
+					fps = max(1, int(round(1.0 / max(self.all_args.ifi, 1e-6))))
+					frame_height, frame_width = frame.shape[:2]
+					eval_video_writer = cv2.VideoWriter(
+						eval_video_path,
+						cv2.VideoWriter_fourcc(*'mp4v'),
+						fps,
+						(frame_width, frame_height))
+					if not eval_video_writer.isOpened():
+						raise RuntimeError('OpenCV could not open the eval video writer')
+
+				eval_video_writer.write(cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
+			except (ImportError, AttributeError, IndexError, OSError, RuntimeError,
+					TypeError, ValueError, cv2.error) as exc:
+				if eval_video_writer is not None:
+					eval_video_writer.release()
+				eval_video_writer = None
+				record_eval_video = False
+				print(f"WARNING: eval video recording disabled: {exc}")
+
+		write_eval_frame()
 
 		eval_rnn_states = np.zeros((self.n_eval_rollout_threads, 
 									*self.buffer.rnn_states.shape[2:]), 
@@ -566,7 +610,7 @@ class GMPERunner(Runner):
 
 		for eval_step in range(self.episode_length):
 			self.trainer.prep_rollout()
-			eval_action, eval_rnn_states = self.trainer.policy.act(
+			eval_action, eval_rnn_states, _, _ = self.trainer.policy.act(
 												np.concatenate(eval_obs),
 												np.concatenate(eval_node_obs),
 												np.concatenate(eval_adj),
@@ -598,21 +642,16 @@ class GMPERunner(Runner):
 
 			# Obser reward and next obs
 			eval_obs, eval_agent_id, eval_node_obs, eval_adj, eval_rewards, \
-				eval_dones, eval_infos = self.eval_envs.step(eval_actions_env)
+				eval_dones, eval_infos, *_ = self.eval_envs.step(eval_actions_env)
 			eval_episode_rewards.append(eval_rewards)
+			write_eval_frame()
 			eval_dones_env = np.all(eval_dones, axis=1)
 
-			eval_rnn_states[eval_dones_env] = np.zeros((
-													(eval_dones_env == True).sum(), 
-													self.recurrent_N, 
-													self.hidden_size), 
-													dtype=np.float32)
-			eval_masks = np.ones((self.n_eval_rollout_threads, 
-								self.num_agents, 1), 
-								dtype=np.float32)
-			eval_masks[eval_dones_env] = np.zeros((
-												(eval_dones_env == True).sum(), 1), 
-												dtype=np.float32)
+			eval_rnn_states[eval_dones_env] = 0.0
+			eval_masks = np.ones((self.n_eval_rollout_threads,
+									self.num_agents, 1),
+									dtype=np.float32)
+			eval_masks[eval_dones_env] = 0.0
 
 		eval_episode_rewards = np.array(eval_episode_rewards)
 		eval_env_infos = {}
@@ -624,6 +663,16 @@ class GMPERunner(Runner):
 		print("eval average episode rewards of agent: " + 
 											str(eval_average_episode_rewards))
 		self.log_env(eval_env_infos, total_num_steps)
+
+		if eval_video_writer is not None:
+			eval_video_writer.release()
+			if eval_video_path is not None and os.path.getsize(eval_video_path) > 0:
+				try:
+					wandb.log(
+						{'eval/video': wandb.Video(eval_video_path, format='mp4')},
+						step=total_num_steps)
+				except (OSError, RuntimeError, ValueError, wandb.errors.Error) as exc:
+					print(f"WARNING: eval video upload failed: {exc}")
 
 	def save_images(self, img_list, filename):
 
