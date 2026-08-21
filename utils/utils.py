@@ -78,7 +78,7 @@ def print_args(args: argparse.Namespace):
     print_dash(box_dist)
 
 
-def connected_to_internet(url: str = 'http://www.google.com/', timeout: int = 5):
+def connected_to_internet(url: str = 'https://api.wandb.ai/', timeout: int = 5):
     """
         Check if system is connected to the internet
         Used when running code on MIT Supercloud
