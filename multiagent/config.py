@@ -77,7 +77,7 @@ class RewardBinaryConfig():
     # Usually, only one of CONFLICT or CONFLICT_VALUE is used.
     SAFETY_VIOLATION = False
     HJ_VALUE = False
-    POTENTIAL_CONFLICT = False
+    POTENTIAL_CONFLICT = True
     SEPARATION_DISTANCE_CURRICULUM = False
     INITIAL_PHASE_USE_SAFETY_FILTER = False
     DIFF_FROM_FILTERED_ACTION = False
