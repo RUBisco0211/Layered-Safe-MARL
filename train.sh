@@ -15,7 +15,7 @@ user_name="jason"
 
 ## MAJOR ARGUMENTS TO CHECK!
 # GPU number (check unused GPU with nvidia-smi)
-cuda_device=1
+cuda_device=0
 # "double_integrator" or "airtaxi"
 dynamics_type="airtaxi"
 scenario_name="navigation_graph_safe"
@@ -65,6 +65,24 @@ RESULTS_ROOT="$(dirname "${PROJECT_ROOT}")/results"
 echo "PROJECT_ROOT: ${PROJECT_ROOT}"
 echo "RESULTS_ROOT: ${RESULTS_ROOT}"
 
+CONFIG_FILE="${PROJECT_ROOT}/multiagent/config.py"
+ORIGINAL_CONFIG_FILE=$(mktemp)
+cp "${CONFIG_FILE}" "${ORIGINAL_CONFIG_FILE}"
+
+restore_config() {
+    if [ -f "${ORIGINAL_CONFIG_FILE}" ]; then
+        cp "${ORIGINAL_CONFIG_FILE}" "${CONFIG_FILE}"
+        rm -f "${ORIGINAL_CONFIG_FILE}"
+    fi
+}
+
+set_potential_conflict() {
+    local enabled=$1
+    sed -i -E "s/^([[:space:]]*POTENTIAL_CONFLICT[[:space:]]*=[[:space:]]*)(True|False)(.*)$/\\1${enabled}\\3/" "${CONFIG_FILE}"
+}
+
+trap restore_config EXIT
+
 # Run a single training phase.
 #   $1 = use_safety_filter  ("True"/"False")
 #   $2 = str_safety_filter  ("1"/"0", used in wandb project name)
@@ -76,6 +94,7 @@ run_training() {
     local datetime_str=$(date '+%y%m%d_%H%M%S')
     local experiment_name_str="${user_name}_${datetime_str}_agent${n_agents}_landmark${n_landmarks}_eplength${episode_length}_world${world_size}"
     local num_rollout_threads=32
+    LAST_EXPERIMENT_NAME="${experiment_name_str}"
 
     echo "============================================================"
     echo "Running training: use_safety_filter=${use_safety_filter} ${model_dir_arg}"
@@ -115,24 +134,36 @@ run_training() {
 }
 
 # ===================== PHASE 1: warmstart (no safety filter, from scratch) =====================
-run_training "False" "0" ""
+if [ -n "${WARMSTART_MODEL_DIR:-}" ]; then
+    warmstart_model_dir="${WARMSTART_MODEL_DIR}"
+    if [ ! -f "${warmstart_model_dir}/actor.pt" ] || [ ! -f "${warmstart_model_dir}/critic.pt" ]; then
+        echo "ERROR: WARMSTART_MODEL_DIR must contain actor.pt and critic.pt: ${warmstart_model_dir}"
+        exit 1
+    fi
+    echo "Skipping phase 1; using supplied warmstart model."
+else
+    set_potential_conflict "False"
+    echo "Set RewardBinaryConfig.POTENTIAL_CONFLICT = False"
+    run_training "False" "0" ""
 
-# Locate the warmstart model: most recent actor.pt saved under RESULTS_ROOT (wandb run dir).
-warmstart_model_dir=$(find "${RESULTS_ROOT}" -name actor.pt -printf '%T@ %h\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2)
-if [ -z "$warmstart_model_dir" ]; then
-    echo "ERROR: warmstart model not found under ${RESULTS_ROOT}. Cannot start phase 2."
-    exit 1
+    # Locate the warmstart model only inside the phase-1 experiment directory.
+    phase1_result_dir="${RESULTS_ROOT}/${scenario_name}/${LAST_EXPERIMENT_NAME}"
+    warmstart_model_dir=$(find "${phase1_result_dir}" -name actor.pt -printf '%T@ %h\n' 2>/dev/null | sort -rn | sed -n '1s/^[^ ]* //p')
+    if [ -z "$warmstart_model_dir" ]; then
+        echo "ERROR: warmstart model not found under ${phase1_result_dir}. Cannot start phase 2."
+        exit 1
+    fi
 fi
 echo "warmstart model dir: ${warmstart_model_dir}"
 
 # ===================== PHASE 2: safety-informed (with safety filter) =====================
 # Enable POTENTIAL_CONFLICT reward (our method) in multiagent/config.py before phase 2.
-sed -i '/POTENTIAL_CONFLICT = False/s/False/True/' multiagent/config.py
+set_potential_conflict "True"
 echo "Set RewardBinaryConfig.POTENTIAL_CONFLICT = True"
 
 run_training "True" "1" "--model_dir=${warmstart_model_dir}"
 
-# Revert config.py to default.
-sed -i '/POTENTIAL_CONFLICT = True/s/True/False/' multiagent/config.py
-echo "Reverted RewardBinaryConfig.POTENTIAL_CONFLICT = False"
+restore_config
+trap - EXIT
+echo "Restored the original multiagent/config.py"
 echo "All training phases complete."

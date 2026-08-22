@@ -1,4 +1,8 @@
 #!/bin/bash
+set -e
+
+export SAFE_MARL_HEADLESS_RENDER="${SAFE_MARL_HEADLESS_RENDER:-true}"
+
 experiment_name_str="double_integrator_safety_informed"
 
 # "double_integrator" or "airtaxi"

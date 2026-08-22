@@ -27,18 +27,14 @@ class PopArt(torch.nn.Module):
         self.input_shape = input_shape
         self.output_shape = output_shape
 
-        self.weight = nn.Parameter(torch.Tensor(output_shape, 
-                                                input_shape)).to(**self.tpdv)
-        self.bias = nn.Parameter(torch.Tensor(output_shape)).to(**self.tpdv)
-        
-        self.stddev = nn.Parameter(torch.ones(output_shape), 
-                                    requires_grad=False).to(**self.tpdv)
-        self.mean = nn.Parameter(torch.zeros(output_shape), 
-                                    requires_grad=False).to(**self.tpdv)
-        self.mean_sq = nn.Parameter(torch.zeros(output_shape), 
-                                    requires_grad=False).to(**self.tpdv)
-        self.debiasing_term = nn.Parameter(torch.tensor(0.0), 
-                                    requires_grad=False).to(**self.tpdv)
+        self.weight = nn.Parameter(torch.empty(output_shape, input_shape,
+                                               **self.tpdv))
+        self.bias = nn.Parameter(torch.empty(output_shape, **self.tpdv))
+
+        self.register_buffer('stddev', torch.ones(output_shape, **self.tpdv))
+        self.register_buffer('mean', torch.zeros(output_shape, **self.tpdv))
+        self.register_buffer('mean_sq', torch.zeros(output_shape, **self.tpdv))
+        self.register_buffer('debiasing_term', torch.tensor(0.0, **self.tpdv))
 
         self.reset_parameters()
 
@@ -51,6 +47,7 @@ class PopArt(torch.nn.Module):
         self.mean.zero_()
         self.mean_sq.zero_()
         self.debiasing_term.zero_()
+        self.stddev.fill_(1.0)
 
     def forward(self, input_vector):
         if type(input_vector) == np.ndarray:
@@ -65,7 +62,8 @@ class PopArt(torch.nn.Module):
             input_vector = torch.from_numpy(input_vector)
         input_vector = input_vector.to(**self.tpdv)
         
-        old_mean, old_stddev = self.mean, self.stddev
+        old_mean = self.mean.clone()
+        old_stddev = self.stddev.clone()
 
         batch_mean = input_vector.mean(dim=tuple(range(self.norm_axes)))
         batch_sq_mean = (input_vector ** 2).mean(dim=tuple(range(self.norm_axes)))
@@ -76,11 +74,13 @@ class PopArt(torch.nn.Module):
 
         # changed the next 3 lines according to this issue:
         # https://github.com/marlbenchmark/on-policy/issues/19#issue-939380562 
-        self.stddev = nn.Parameter((self.mean_sq - 
-                                    self.mean ** 2).sqrt().clamp(min=1e-4))
+        variance = (self.mean_sq - self.mean ** 2).clamp(min=0.0)
+        new_stddev = variance.sqrt().clamp(min=1e-4)
 
-        self.weight = nn.Parameter(self.weight * old_stddev / self.stddev)
-        self.bias = nn.Parameter((old_stddev * self.bias + old_mean - self.mean) / self.stddev)
+        self.weight.mul_(old_stddev / new_stddev)
+        self.bias.copy_((old_stddev * self.bias + old_mean - self.mean) /
+                        new_stddev)
+        self.stddev.copy_(new_stddev)
 
     def debiased_mean_var(self):
         debiased_mean = self.mean / self.debiasing_term.clamp(min=self.epsilon)

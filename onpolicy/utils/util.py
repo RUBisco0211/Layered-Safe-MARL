@@ -22,9 +22,10 @@ def update_linear_schedule(optimizer, epoch, total_num_epochs, initial_lr):
         param_group['lr'] = lr
 
 def huber_loss(e, d) -> float:
-    a = (abs(e) <= d).float()
-    b = (e > d).float()
-    return a*e**2/2 + b*d*(abs(e)-d/2)
+    abs_error = torch.abs(e)
+    quadratic = torch.clamp(abs_error, max=d)
+    linear = abs_error - quadratic
+    return quadratic**2/2 + d*linear
 
 def mse_loss(e):
     return e**2/2

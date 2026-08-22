@@ -185,9 +185,9 @@ class ACTLayer(nn.Module):
                     # print("act active_masks",active_masks.shape)
                     # print("action_logit.entropy().shape",action_logit.entropy().shape)
                     if len(action_logit.entropy().shape) == len(active_masks.shape):
-                        dist_entropy.append((action_logit.entropy() * active_masks).sum()/active_masks.sum()) 
+                        dist_entropy.append((action_logit.entropy() * active_masks).sum()/active_masks.sum().clamp_min(1.0))
                     else:
-                        dist_entropy.append((action_logit.entropy() * active_masks.squeeze(-1)).sum()/active_masks.sum())
+                        dist_entropy.append((action_logit.entropy() * active_masks.squeeze(-1)).sum()/active_masks.sum().clamp_min(1.0))
                 else:
                     dist_entropy.append(action_logit.entropy().mean())
                 
@@ -205,7 +205,7 @@ class ACTLayer(nn.Module):
                 if active_masks is not None:
                     # print("act active_masks",active_masks.shape)
                     # print("action_logit.entropy().shape",action_logit.entropy().shape)
-                    dist_entropy.append((action_logit.entropy()*active_masks.squeeze(-1)).sum()/active_masks.sum())
+                    dist_entropy.append((action_logit.entropy()*active_masks.squeeze(-1)).sum()/active_masks.sum().clamp_min(1.0))
                 else:
                     dist_entropy.append(action_logit.entropy().mean())
 
@@ -230,7 +230,7 @@ class ACTLayer(nn.Module):
                 if action_logits.entropy().dim() > 1:  # Box action space
                     dist_entropy = (action_logits.entropy().mean() * active_masks.squeeze(-1)).sum()
                 else:  # Discrete action space
-                    dist_entropy = (action_logits.entropy() * active_masks.squeeze(-1)).sum() / active_masks.sum()
+                    dist_entropy = (action_logits.entropy() * active_masks.squeeze(-1)).sum() / active_masks.sum().clamp_min(1.0)
             else:
                 dist_entropy = action_logits.entropy().mean()
         

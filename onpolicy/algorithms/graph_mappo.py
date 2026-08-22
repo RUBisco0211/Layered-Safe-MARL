@@ -50,7 +50,7 @@ class GR_MAPPO():
         self._use_valuenorm = args.use_valuenorm
         self._use_value_active_masks = args.use_value_active_masks
         self._use_policy_active_masks = args.use_policy_active_masks
-        self.scaler = amp.GradScaler() 
+        self.scaler = amp.GradScaler(enabled=False)
         assert (self._use_popart and self._use_valuenorm) == False, ("self._use_popart and self._use_valuenorm can not be set True simultaneously")
         
         if self._use_popart:
@@ -83,7 +83,6 @@ class GR_MAPPO():
                             value_preds_batch).clamp(-self.clip_param,
                                                     self.clip_param)
         if self._use_popart or self._use_valuenorm:
-            self.value_normalizer.update(return_batch)
             error_clipped = self.value_normalizer.normalize(return_batch) - \
                             value_pred_clipped
             error_original = self.value_normalizer.normalize(return_batch) - \
@@ -105,12 +104,13 @@ class GR_MAPPO():
             value_loss = value_loss_original
 
         if self._use_value_active_masks:
-            value_loss = (value_loss * active_masks_batch).sum() / active_masks_batch.sum()
+            active_count = active_masks_batch.sum().clamp_min(1.0)
+            value_loss = (value_loss * active_masks_batch).sum() / active_count
         else:
             value_loss = value_loss.mean()
 
         return value_loss
-    @torch.cuda.amp.autocast()
+    @torch.cuda.amp.autocast(enabled=False)
     def ppo_update(self, 
                 sample:Tuple, 
                 update_actor:bool=True) -> Tuple[Tensor, Tensor, 
@@ -147,6 +147,8 @@ class GR_MAPPO():
         value_preds_batch = check(value_preds_batch).to(**self.tpdv)
         return_batch = check(return_batch).to(**self.tpdv)
         active_masks_batch = check(active_masks_batch).to(**self.tpdv)
+        if self._use_popart or self._use_valuenorm:
+            self.value_normalizer.update(return_batch)
         # print("MaPPO", active_masks_batch.T)
         # Reshape to do in a single forward pass for all steps
         values, action_log_probs, dist_entropy = self.policy.evaluate_actions(
@@ -173,10 +175,11 @@ class GR_MAPPO():
         # print(f'Surr1: {surr1.shape} \t Values: {values.shape}')
 
         if self._use_policy_active_masks:
+            active_count = active_masks_batch.sum().clamp_min(1.0)
             policy_action_loss = (
                                 -torch.sum(torch.min(surr1, surr2), dim=-1,
                                 keepdim=True) * active_masks_batch
-                                ).sum() / active_masks_batch.sum()
+                                ).sum() / active_count
         else:
             policy_action_loss = -torch.sum(torch.min(surr1, surr2), 
                                             dim=-1, keepdim=True).mean()

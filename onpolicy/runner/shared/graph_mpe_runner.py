@@ -11,6 +11,7 @@ import csv
 import torch.nn as nn
 import cv2
 from collections import defaultdict
+from tqdm import tqdm
 
 def _t2n(x):
 	return x.detach().cpu().numpy()
@@ -47,9 +48,15 @@ class GMPERunner(Runner):
 		start = time.time()
 		num_total_episode = int(self.num_env_steps) // self.episode_length // self.n_rollout_threads
 		print("number of total episode: ", num_total_episode)
+		training_episodes = tqdm(
+			range(num_total_episode),
+			desc="Training",
+			unit="episode",
+			dynamic_ncols=True,
+		)
 
 		# This is where the episodes are actually run.
-		for episode in range(num_total_episode):
+		for episode in training_episodes:
 
 
 			if self.use_linear_lr_decay:
@@ -189,6 +196,12 @@ class GMPERunner(Runner):
 				env_infos = self.process_infos(infos)
 				avg_ep_rew = np.mean(self.buffer.rewards) * self.episode_length
 				train_infos["average_episode_rewards"] = avg_ep_rew
+				training_episodes.set_postfix(
+					reward=f"{avg_ep_rew:.2f}",
+					done=f"{100 * self.done_percentage:.1f}%",
+					conflict=f"{100 * self.episode_conflict_percentage_mean:.1f}%",
+					refresh=False,
+				)
 				print(f"Avg Ep rewards: {avg_ep_rew:.2f} | "
 					f"avg travel time: {self.episode_travel_time_mean:.2f} "
 					f"distance: {self.episode_travel_distance_mean:.2f} "
@@ -732,8 +745,12 @@ class GMPERunner(Runner):
 			file_path = str(self.gif_dir) + file_name
 			frame_shape = envs.render('rgb_array')[0][0].shape[:2]  # Get height and width
 			fps = int(1 / self.all_args.ifi)
-			fourcc = cv2.VideoWriter_fourcc(*'avc1')  # Codec for MP4
+			fourcc = cv2.VideoWriter_fourcc(*'mp4v')
 			video_writer = cv2.VideoWriter(file_path, fourcc, fps, (frame_shape[1], frame_shape[0]))
+			if not video_writer.isOpened():
+				video_writer.release()
+				video_writer = None
+				print(f"WARNING: video recording disabled; OpenCV could not open {file_path}")
 		eval_log_file_name = str(self.gif_dir) + '/eval_log_' + scenario_name + '_num_agent' + str(self.all_args.num_agents) \
 						+ '_landmark' + str(self.all_args.num_landmarks) \
 						+ '_safety_' + str(self.all_args.use_safety_filter) \
@@ -929,7 +946,8 @@ class GMPERunner(Runner):
 							text_color = (255, 100, 100) if num_agents_safety_violated > 0 else (255, 255, 255)
 							_put_label(image, f"Vehicle Near Collision:  {num_agents_safety_violated} / {self.num_agents}", label_x_pos, label_y_pos + 4 * label_y_offset + 11, color=text_color)
 
-						video_writer.write(cv2.cvtColor(image, cv2.COLOR_RGB2BGR))  # Convert RGB to BGR for OpenCV
+						if video_writer is not None:
+							video_writer.write(cv2.cvtColor(image, cv2.COLOR_RGB2BGR))  # Convert RGB to BGR for OpenCV
 						all_frames.append(image)
 						calc_end = time.time()
 						elapsed = calc_end - calc_start
@@ -1023,8 +1041,12 @@ class GMPERunner(Runner):
 		# rewards_mean = np.mean(rewards_arr)
 		
 		if not get_metrics and self.all_args.save_gifs:
-			video_writer.release()
-			print(f"Video saved to {file_path}")
+			if video_writer is not None:
+				video_writer.release()
+				if os.path.isfile(file_path) and os.path.getsize(file_path) > 0:
+					print(f"Video saved to {file_path}")
+				else:
+					print(f"WARNING: video writer produced no output at {file_path}")
 
 		print("Average Stats over Episodes:", average_stats)
 		eval_log_file.close()

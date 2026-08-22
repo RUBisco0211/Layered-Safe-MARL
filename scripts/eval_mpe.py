@@ -67,11 +67,9 @@ def parse_args(args, parser):
 
 def modify_args(model_dir:str, 
                 args:argparse.Namespace, 
-                exclude_args:list=['model_dir', 'num_agents', 'num_obstacles', 
-                                'num_landmarks', 'render_episodes', 'world_size',
+                exclude_args:list=['model_dir', 'render_episodes',
                                 'seed', 'save_gifs', 'use_render', 'episode_length',
                                 'use_dones', 'collaborative', 
-                                'scenario_name',
                                 'num_walls','zero_shift', 'use_safety_filter']):
     """
         Modify the args used to train the model
